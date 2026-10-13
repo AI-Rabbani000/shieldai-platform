@@ -165,6 +165,7 @@ app.add_middleware(RequestLoggingMiddleware)
 
 from gds_api.reasoning.routes import router as reasoning_router
 from gds_kernel.kernel_router import router as kernel_router
+from gds_api.ci_gate import router as ci_router
 
 # Bridge router (Base44 Super Agent ↔ Rabbani AI Core)
 try:
@@ -329,3 +330,4 @@ except Exception as e:
 
 # GDS Agent Kernel Router
 app.include_router(kernel_router)
+app.include_router(ci_router)
