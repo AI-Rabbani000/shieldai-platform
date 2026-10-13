@@ -10,6 +10,7 @@ Every tool execution goes through the sandbox with:
 """
 
 import logging
+import os
 import asyncio
 from typing import Dict, Any, Optional, List
 from gds_api.reasoning.kernel_agent_loop import run_kernel_agent
@@ -18,6 +19,13 @@ logger = logging.getLogger("gds.kernel.bridge")
 
 # Kernel API endpoint (same process, localhost)
 KERNEL_API = "http://127.0.0.1:8000/kernel"
+
+
+def _kernel_headers() -> Dict[str, str]:
+    key = os.environ.get("BRIDGE_API_KEY", "")
+    if not key:
+        raise RuntimeError("BRIDGE_API_KEY is required for kernel access")
+    return {"Authorization": f"Bearer {key}"}
 
 
 async def execute_tool(tool_id: str, payload: Dict[str, Any], pid: str = "agent") -> Dict[str, Any]:
@@ -34,7 +42,8 @@ async def execute_tool(tool_id: str, payload: Dict[str, Any], pid: str = "agent"
     """
     import aiohttp
     
-    async with aiohttp.ClientSession() as session:
+    headers = _kernel_headers()
+    async with aiohttp.ClientSession(headers=headers) as session:
         async with session.post(
             f"{KERNEL_API}/tool/execute",
             json={"pid": pid, "tool_id": tool_id, "payload": payload},
@@ -54,19 +63,21 @@ async def get_kernel_status() -> Dict[str, Any]:
     """Get kernel status including sandbox health."""
     import aiohttp
     
-    async with aiohttp.ClientSession() as session:
+    headers = _kernel_headers()
+    async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(f"{KERNEL_API}/status", timeout=aiohttp.ClientTimeout(total=10)) as resp:
             return await resp.json()
 
 
-async def create_process(agent_id: str, agent_type: str = "security", priority: int = 2, goal: str = "") -> Dict[str, Any]:
+async def create_process(agent_id: str, agent_type: str = "security", priority: int = 2, goal: str = "", task_name: Optional[str] = None) -> Dict[str, Any]:
     """Create an agent process in the kernel."""
     import aiohttp
     
-    async with aiohttp.ClientSession() as session:
+    headers = _kernel_headers()
+    async with aiohttp.ClientSession(headers=headers) as session:
         async with session.post(
             f"{KERNEL_API}/process/create",
-            json={"agent_id": agent_id, "agent_type": agent_type, "priority": priority, "goal": goal},
+            json={"agent_id": agent_id, "task_name": task_name or agent_id, "priority": priority, "goal": goal},
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             return await resp.json()
@@ -76,7 +87,8 @@ async def list_tools() -> List[Dict[str, Any]]:
     """List all registered kernel tools."""
     import aiohttp
     
-    async with aiohttp.ClientSession() as session:
+    headers = _kernel_headers()
+    async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(f"{KERNEL_API}/tools", timeout=aiohttp.ClientTimeout(total=10)) as resp:
             return await resp.json()
 

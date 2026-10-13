@@ -16,6 +16,7 @@ The agent NEVER runs out of context — it just pages.
 """
 
 import logging
+import os
 import time
 import json
 import httpx
@@ -60,7 +61,10 @@ class KernelAgentLoop:
         self.max_tokens = max_tokens
         
         self.pid: Optional[str] = None
-        self._client = httpx.Client(timeout=120.0)
+        bridge_key = os.environ.get("BRIDGE_API_KEY", "")
+        if not bridge_key:
+            raise RuntimeError("BRIDGE_API_KEY is required for kernel access")
+        self._client = httpx.Client(timeout=120.0, headers={"Authorization": f"Bearer {bridge_key}"})
         self.iterations = 0
         self.tool_calls_made: List[Dict] = []
         self.start_time = 0

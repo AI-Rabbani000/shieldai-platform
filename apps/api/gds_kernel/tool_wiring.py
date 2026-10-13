@@ -49,11 +49,12 @@ def _run_subprocess(cmd: list, timeout: int = 120) -> Dict[str, Any]:
         return {"exit_code": -1, "stdout": "", "stderr": str(e), "success": False}
 
 
-def _run_python(code: str, timeout: int = 30) -> Dict[str, Any]:
+def _run_python(code: str, timeout: int = 30, payload: Optional[Dict] = None) -> Dict[str, Any]:
     _ensure_path()
     try:
         result = subprocess.run(
             [sys.executable, "-c", code],
+            input=json.dumps(payload) if payload is not None else None,
             capture_output=True, text=True, timeout=timeout,
             env={**os.environ, "PYTHONPATH": VPS_API_DIR},
         )
@@ -263,107 +264,100 @@ except Exception as e:
     return {"tool": "aws_iam_scan", **result, "success": True}
 
 
-def exec_get_findings(payload: Dict) -> Dict:
-    severity = payload.get("severity", "")
-    limit = payload.get("limit", 100)
-    logger.info(f"[get_findings] severity={severity} limit={limit}")
-    code = '''
-import json, sys, os
-sys.path.insert(0, "/opt/gds-os/apps/api")
-
-db_url = None
-env_path = "/opt/.env"
-if os.path.exists(env_path):
-    with open(env_path) as f:
-        for line in f:
-            if line.startswith("DATABASE_URL="):
-                db_url = line.strip().split("=", 1)[1].strip().strip("'").strip('"')
-                break
-
-if not db_url:
-    db_pass = os.environ.get("POSTGRES_PASSWORD", "")
-    db_user = os.environ.get("POSTGRES_USER", "gds")
-    db_url = "postgresql://" + db_user + ":" + db_pass + "@127.0.0.1:5432/gds_os"
-
+FINDING_DATABASE_SCRIPT = r'''
+import json, os, sys
 try:
     import psycopg2
-    conn = psycopg2.connect(db_url)
-    cur = conn.cursor()
-    severity = "''' + str(severity) + '''"
-    limit = ''' + str(limit) + '''
-    if severity:
-        cur.execute("SELECT id, title, severity, status, scanner, detected_at FROM security_findings WHERE severity = %s ORDER BY detected_at DESC LIMIT %s", (severity, limit))
+    request = json.load(sys.stdin)
+    db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        try:
+            with open("/opt/.env") as env_file:
+                for line in env_file:
+                    if line.startswith("DATABASE_URL="):
+                        db_url = line.split("=", 1)[1].strip().strip("'").strip('"')
+                        break
+        except OSError:
+            pass
+    if db_url:
+        conn = psycopg2.connect(db_url, connect_timeout=5)
     else:
-        cur.execute("SELECT id, title, severity, status, scanner, detected_at FROM security_findings ORDER BY detected_at DESC LIMIT %s", (limit,))
-    rows = cur.fetchall()
-    findings = [{"id": str(r[0]), "title": r[1], "severity": r[2], "status": r[3], "scanner": r[4], "detected_at": str(r[5])} for r in rows]
-    print(json.dumps({"findings": findings, "count": len(findings)}))
-    cur.close()
-    conn.close()
-except Exception as e:
-    print(json.dumps({"error": str(e)}))
+        password = os.environ.get("POSTGRES_PASSWORD", "")
+        if not password:
+            raise RuntimeError("Database credentials not configured")
+        conn = psycopg2.connect(
+            host="127.0.0.1", port=5432, dbname="gds_os",
+            user=os.environ.get("POSTGRES_USER", "gds"), password=password,
+            connect_timeout=5,
+        )
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                if request["operation"] == "get":
+                    payload = request["payload"]
+                    conditions, values = [], []
+                    for field in ("severity", "target"):
+                        if payload.get(field):
+                            conditions.append(field + " = %s")
+                            values.append(payload[field])
+                    where = " WHERE " + " AND ".join(conditions) if conditions else ""
+                    query = "SELECT id, title, severity, status, scanner, detected_at, target FROM security_findings" + where + " ORDER BY detected_at DESC LIMIT %s"
+                    cur.execute(query, tuple(values + [payload["limit"]]))
+                    findings = [{"id": str(r[0]), "title": r[1], "severity": r[2], "status": r[3], "scanner": r[4], "detected_at": str(r[5]), "target": r[6]} for r in cur.fetchall()]
+                    result = {"success": True, "findings": findings, "count": len(findings)}
+                elif request["operation"] == "store":
+                    payload = request["payload"]
+                    cur.execute(
+                        "INSERT INTO security_findings (scanner, title, severity, target, details, status) VALUES (%s, %s, %s, %s, %s, 'open') RETURNING id",
+                        (payload["source"], payload["title"], payload["severity"], payload["target"], json.dumps({"description": payload["description"], "cve_id": payload["cve_id"]})),
+                    )
+                    result = {"success": True, "finding_id": str(cur.fetchone()[0])}
+                else:
+                    raise ValueError("Unknown finding operation")
+        print(json.dumps(result))
+    finally:
+        conn.close()
+except Exception:
+    # Connection exceptions can contain credentials; do not return raw text.
+    print(json.dumps({"success": False, "error": "Finding database operation failed"}))
 '''
-    result = _run_python(code, timeout=15)
-    if "error" in result:
-        return {"tool": "get_findings", "error": result["error"], "success": False}
-    return {"tool": "get_findings", **result, "success": True}
+
+
+def _finding_result(tool: str, operation: str, payload: Dict, timeout: int) -> Dict:
+    result = _run_python(FINDING_DATABASE_SCRIPT, timeout=timeout,
+                         payload={"operation": operation, "payload": payload})
+    if not isinstance(result, dict) or result.get("success") is not True:
+        return {"tool": tool, "success": False, "error": "Finding database operation failed"}
+    return {**result, "tool": tool}
+
+
+def exec_get_findings(payload: Dict) -> Dict:
+    try:
+        raw_limit = payload.get("limit", 100)
+        if isinstance(raw_limit, bool) or not isinstance(raw_limit, (int, str)):
+            raise ValueError("Invalid limit")
+        limit = int(raw_limit)
+        if not 1 <= limit <= 1000:
+            raise ValueError("Invalid limit")
+    except (TypeError, ValueError):
+        return {"tool": "get_findings", "success": False, "error": "limit must be an integer between 1 and 1000"}
+    return _finding_result("get_findings", "get", {
+        "severity": str(payload.get("severity", "")),
+        "target": str(payload.get("target", "")), "limit": limit,
+    }, timeout=15)
 
 
 def exec_store_finding(payload: Dict) -> Dict:
-    title = payload.get("title", "Unknown finding")
-    target = str(payload.get("target", payload.get("asset", "")))
-    severity = payload.get("severity", "MEDIUM")
-    source = payload.get("source", "kernel")
-    description = payload.get("description", "")
-    cve_id = payload.get("cve_id", "")
-    logger.info(f"[store_finding] title={title} severity={severity}")
-    
-    code = '''
-import json, sys, os
-sys.path.insert(0, "/opt/gds-os/apps/api")
-
-db_url = os.environ.get("DATABASE_URL", "")
-if not db_url:
-    try:
-        with open("/opt/.env") as f:
-            for line in f:
-                if line.startswith("DATABASE_URL="):
-                    db_url = line.strip().split("=", 1)[1].strip().strip("'").strip('"')
-                    break
-    except OSError:
-        pass
-if not db_url:
-    db_pass = os.environ.get("POSTGRES_PASSWORD", "")
-    db_user = os.environ.get("POSTGRES_USER", "gds")
-    db_url = "postgresql://" + db_user + ":" + db_pass + "@127.0.0.1:5432/gds_os"
-
-title = "''' + title.replace("'", "''") + '''"
-severity = "''' + severity.replace("'", "''") + '''"
-source = "''' + source.replace("'", "''") + '''"
-description = "''' + description.replace("'", "''")[:2000] + '''"
-cve_id = "''' + cve_id.replace("'", "''") + '''"
-target = "''' + target.replace("'", "''") + '''"
-
-try:
-    import psycopg2
-    conn = psycopg2.connect(db_url)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO security_findings (scanner, title, severity, target, details, status) VALUES (%s, %s, %s, %s, %s, 'open') RETURNING id",
-        (source, title, severity, target, json.dumps({"description": description, "cve_id": cve_id}))
-    )
-    finding_id = cur.fetchone()[0]
-    conn.commit()
-    print(json.dumps({"success": True, "finding_id": str(finding_id)}))
-    cur.close()
-    conn.close()
-except Exception as e:
-    print(json.dumps({"error": str(e)}))
-'''
-    result = _run_python(code, timeout=10)
-    if "error" in result:
-        return {"tool": "store_finding", "error": result["error"], "success": False}
-    return {"tool": "store_finding", **result, "success": True}
+    # Caller text is serialized over stdin; it is never inserted into code.
+    values = {
+        "title": str(payload.get("title", "Unknown finding")),
+        "target": str(payload.get("target", payload.get("asset", ""))),
+        "severity": str(payload.get("severity", "MEDIUM")),
+        "source": str(payload.get("source", "kernel")),
+        "description": str(payload.get("description", ""))[:2000],
+        "cve_id": str(payload.get("cve_id", "")),
+    }
+    return _finding_result("store_finding", "store", values, timeout=10)
 
 
 # ============================================================

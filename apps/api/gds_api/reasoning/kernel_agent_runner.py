@@ -16,6 +16,7 @@ import logging
 import time
 import uuid
 import asyncio
+import inspect
 import json
 from typing import Dict, Any, Optional
 
@@ -57,14 +58,10 @@ async def _safe_execute_tool(tool_name, tool_args):
     if execute_tool is None:
         return {"error": "No tool executor available"}
     try:
-        # tool_gateway.execute_tool(tool_name, action=..., payload=...) takes
-        # params as the  kwarg; kernel_bridge.execute_tool takes them
-        # as the 2nd positional arg. Match by keyword first, fall back positionally.
-        try:
-            result = execute_tool(tool_name, payload=tool_args)
-        except TypeError:
-            result = execute_tool(tool_name, tool_args)
-        if asyncio.iscoroutine(result):
+        # Both supported adapters accept payload by keyword. Never retry after
+        # TypeError: the executor may have already performed a side effect.
+        result = execute_tool(tool_name, payload=tool_args)
+        if inspect.isawaitable(result):
             result = await result
         return result
     except Exception as e:
