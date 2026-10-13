@@ -62,9 +62,11 @@ def gate_verdict(data, *, expected_repo=None, expected_commit=None):
     summary = data.get("summary")
     if not isinstance(reasons, list) or not all(isinstance(r, str) for r in reasons):
         raise IntegrationError("Gate response has invalid block reasons")
-    fields = ("critical", "high", "new_critical", "secrets_found")
+    fields = ("critical", "high", "new_critical", "secrets_found", "files_scanned")
     if not isinstance(summary, dict) or any(type(summary.get(k)) is not int or summary[k] < 0 for k in fields):
         raise IntegrationError("Gate response has invalid finding counts")
+    if summary["files_scanned"] < 1:
+        raise IntegrationError("Gate response has no diff coverage")
     if data["pass"] and (reasons or any(summary[k] > 0 for k in ("critical", "new_critical", "secrets_found"))):
         raise IntegrationError("Passing response contains blocking findings or reasons")
     return ("passed" if data["pass"] else "blocked"), summary["critical"]

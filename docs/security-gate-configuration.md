@@ -18,7 +18,8 @@ the read-only workflow GitHub token required by the backend to read the commit.
 
 Successful assessments require `status: ok`, `verdict: pass|blocked`, the
 consistent boolean `pass`, string-list `block_reasons`, and nonnegative integer
-counts `critical`, `high`, `new_critical`, `secrets_found` in `summary`.
+counts `critical`, `high`, `new_critical`, `secrets_found` and positive
+`files_scanned` in `summary`.
 Repository and commit must match the request. A passing response cannot contain
 critical, new-critical or secret findings under this workflow's policy.
 
@@ -51,8 +52,14 @@ valid blocking verdict, wrong credentials, unavailable endpoint, HTML response,
 wrong repo/commit, and no AutoFix on integration failures. Report only status,
 coverage and schema; never headers or tokens.
 
-PR #11 requires backend corrections/tests for paginated changed files,
-missing/truncated patches, mixed-case severity counts, high policy enforcement
-and blocking I/O in an async route. These were posted in the review. A valid
-schema alone does not prove complete scan coverage. Keep PR #10 draft until
-that review and the real CI round-trip are complete.
+PR #11's latest revision 190e245a addresses the four review findings:
+full unified-diff retrieval with a size cap, SQL severity normalization,
+requested severity policy enforcement and a synchronous threadpool handler.
+Codex performed six offline mock review checks; Co-Pilot reports separate live
+verification. The client now rejects missing/zero diff coverage. The scan is
+limited to supported high-confidence patterns on added text lines; it is not
+full-tree SAST or binary secret inspection. Dedicated persisted backend tests,
+precise repository-target identity and binary coverage remain follow-up work.
+
+The authenticated PR #10 rerun passed before the final coverage revision.
+Require that revision's CI to pass before merging; then verify push-to-main CI.

@@ -15,7 +15,7 @@ spec.loader.exec_module(client)
 
 class GateClientTests(unittest.TestCase):
     def valid(self, passed=True):
-        return {"status": "ok", "verdict": "pass" if passed else "blocked", "pass": passed, "repo": "Al-Rabbani/shieldai-platform", "commit": "a" * 40, "block_reasons": [] if passed else ["critical finding"], "summary": {"critical": 0 if passed else 1, "high": 0, "new_critical": 0, "secrets_found": 0}}
+        return {"status": "ok", "verdict": "pass" if passed else "blocked", "pass": passed, "repo": "Al-Rabbani/shieldai-platform", "commit": "a" * 40, "block_reasons": [] if passed else ["critical finding"], "summary": {"critical": 0 if passed else 1, "high": 0, "new_critical": 0, "secrets_found": 0, "files_scanned": 1}}
 
     def response(self, body, status=200):
         class Response:
@@ -58,6 +58,13 @@ class GateClientTests(unittest.TestCase):
         with patch.dict(os.environ, {"GITHUB_TOKEN": "test-only", "CI_GATE_API_KEY": ""}), patch.object(client, "request_json") as request, contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(client.main(), 2)
             request.assert_not_called()
+
+    def test_missing_or_zero_diff_coverage_is_not_pass(self):
+        for coverage in (None, 0, -1, True):
+            data = self.valid()
+            data["summary"]["files_scanned"] = coverage
+            with self.subTest(coverage=coverage), self.assertRaises(client.IntegrationError):
+                client.gate_verdict(data)
 
     def test_new_key_is_sent_as_bearer_and_assessment_matches(self):
         data = self.valid()
