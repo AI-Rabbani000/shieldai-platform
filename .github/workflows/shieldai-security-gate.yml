@@ -20,7 +20,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_security_gate_client.py' -v
 
   security-gate:
-    name: ShieldAI Security Scan and Gate
+    name: ShieldAI Security Scan & Gate
     runs-on: ubuntu-latest
     needs: client-contracts
     outputs:
