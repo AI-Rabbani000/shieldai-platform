@@ -1,0 +1,21 @@
+name: GDS runtime boundary regression tests
+on:
+  pull_request:
+    paths:
+      - 'apps/api/gds_api/reasoning/**'
+      - 'apps/api/gds_kernel/**'
+      - 'tests/test_runtime_boundaries.py'
+      - '.github/workflows/runtime-boundaries.yml'
+  push:
+    branches: [main]
+jobs:
+  offline-contracts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_runtime_boundaries.py' -v

@@ -22,6 +22,7 @@ Endpoints:
 """
 
 import os
+import secrets
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
@@ -34,7 +35,7 @@ def _verify_kernel_auth(authorization: str = Header(None)):
         raise HTTPException(401, "Missing or invalid Authorization header")
     token = authorization.replace("Bearer ", "", 1)
     key = os.environ.get("BRIDGE_API_KEY", "")
-    if not key or token != key:
+    if not key or not secrets.compare_digest(token.encode(), key.encode()):
         raise HTTPException(401, "Invalid API key")
 
 router = APIRouter(prefix="/kernel", tags=["GDS Agent Kernel"], dependencies=[Depends(_verify_kernel_auth)])
@@ -47,9 +48,14 @@ def get_kernel():
     global _kernel
     if _kernel is None:
         from gds_kernel.unified_kernel import GDSUnifiedKernel
-        _kernel = GDSUnifiedKernel()
-        _kernel.boot()
-        wire_real_tools(_kernel)
+        candidate = GDSUnifiedKernel()
+        if not candidate.boot():
+            raise RuntimeError("Kernel boot failed")
+        wired_count = wire_real_tools(candidate)
+        if wired_count != len(candidate.sandbox.drivers):
+            raise RuntimeError("Kernel tool wiring incomplete")
+        # Publish only after boot and wiring succeed; a later request can retry.
+        _kernel = candidate
         import logging
         logging.getLogger("gds.kernel.router").info(
             f"Kernel singleton created: id={id(_kernel)}, memory_id={id(_kernel.memory)}"
@@ -123,14 +129,7 @@ async def create_process(req: CreateProcessRequest):
     )
     if not result.success:
         raise HTTPException(400, result.error)
-    # Debug: include kernel instance ID
-        result_data = result.data if result.success else {}
-        result_data["kernel_instance"] = id(k)
-        result_data["memory_instance"] = id(k.memory)
-        return result_data
-        
-        # Original return for other endpoints
-        return result.data
+    return result.data
 
 @router.post("/process/terminate")
 async def terminate_process(req: TerminateProcessRequest):
