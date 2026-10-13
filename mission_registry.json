@@ -1,0 +1,12 @@
+{
+  "comment": "GDS OS recurring agentic missions. interval_seconds <= 0 disables an entry. Customer entries: add a new object per client with their real targets in the goal/context.",
+  "missions": [
+    {
+      "name": "platform-posture-check",
+      "goal": "Run the recurring GDS platform security posture check: nmap scan of localhost with service versions, CISA KEV catalog check for total known exploited vulnerabilities, and security headers verification for api.globaldigitalsecurity.io and app.globaldigitalsecurity.io. Compare against existing findings, store any NEW findings only, and produce an executive summary.",
+      "agents": ["ai-vuln-director", "ai-threat-hunter"],
+      "interval_seconds": 21600,
+      "context": {"scope": "gds-platform", "targets": ["localhost", "api.globaldigitalsecurity.io", "app.globaldigitalsecurity.io"]}
+    }
+  ]
+}

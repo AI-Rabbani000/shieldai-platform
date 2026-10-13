@@ -1,1 +1,13 @@
 .agents/.env
+__pycache__/
+*.pyc
+venv/
+.venv/
+node_modules/
+*.log
+.env
+.mission_scheduler.lock
+mission_state.json
+*.bak
+*.bak.*
+patches/
