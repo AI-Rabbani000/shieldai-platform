@@ -1,60 +1,58 @@
 # ShieldAI CI gate configuration and verification
 
-Tracks issue #9. This change repairs client/workflow handling; it does not
-configure the live endpoint or certify the endpoint's underlying assessment.
+Tracks issue #9; client in PR #10; VPS backend in PR #11. This client change
+reconciles the new production contract. It does not configure GitHub secrets
+or certify the backend's scan coverage.
 
-## Co-Pilot configuration required before merge
+## Required secrets
 
-Confirm the callable function URL and authentication contract. Configure
-`SHIELDAI_GATE_URL` to the actual HTTPS API endpoint, never an editor/login page.
-The new `SHIELDAI_GATE_AUTHORIZATION` secret holds the complete Authorization
-header value supported by that endpoint. If the endpoint uses a different
-header, reconcile the client contract before merge; do not guess a credential
-scheme or paste credentials into PR comments. This client does not follow
-redirects or allow missing endpoint authorization.
+- `SHIELDAI_GATE_URL`: `https://api.globaldigitalsecurity.io/ci/gate`
+- `CI_GATE_API_KEY`: the dedicated CI credential supplied securely by the owner.
 
-The request preserves the existing shieldCICDGate input fields. The response
-must include boolean `pass` and opposite boolean `blocked`, a list of strings
-`block_reasons`, and a nonnegative integer `summary.critical`. An error object,
-HTML, malformed JSON, timeout, missing configuration or HTTP failure means
-`integration_error`, never passed or a finding-based block. Existing Base44
-responses may use text/plain for valid JSON; body/schema validation handles
-this without treating HTML as a verdict.
+The client creates `Authorization: Bearer <CI_GATE_API_KEY>`. Do not set the
+former SHIELDAI_GATE_AUTHORIZATION secret for this route. Do not copy key
+values into chat, PR comments, repository files, or logs. The caller also sends
+the read-only workflow GitHub token required by the backend to read the commit.
 
-The GitHub token sent to the existing endpoint is reduced to read-only
-permissions. The workflow itself provides the CI verdict; any server-side
-GitHub comments/statuses must use a separate scoped provider integration or
-report their permissions failure honestly. No raw response or block reason is
-written into a shell command or log.
+## Response validation
 
-AutoFix requires a validated `blocked` verdict AND repository variable
-`SHIELDAI_AUTOFIX_ENABLED=true`. Keep it unset initially. Before enabling,
-confirm repository/tenant scoping and approved automation policy. Configure
-`SHIELDAI_AUTOFIX_URL` and complete-header secret
-`SHIELDAI_AUTOFIX_AUTHORIZATION` separately. An acknowledged request is not proof
-that every generated PR succeeded.
+Successful assessments require `status: ok`, `verdict: pass|blocked`, the
+consistent boolean `pass`, string-list `block_reasons`, and nonnegative integer
+counts `critical`, `high`, `new_critical`, `secrets_found` in `summary`.
+Repository and commit must match the request. A passing response cannot contain
+critical, new-critical or secret findings under this workflow's policy.
 
-Fork PRs continue using pull_request with withheld secrets; they receive an
-explicit integration error. Do not switch to pull_request_target to execute
-fork code with credentials. An approved internal review branch is needed for
-authenticated assessment of such changes.
+`status: integration_error`, HTML, malformed JSON, missing configuration,
+timeout, redirects, wrong credentials and non-success HTTP statuses are
+integration failures, never a validated security block or pass. No raw response
+or external reason is interpolated into shell commands or logged. JSON body
+validation tolerates the older Base44 text/plain media type but never HTML.
+
+## AutoFix remains opt-in
+
+AutoFix requires a validated blocked verdict AND repository variable
+`SHIELDAI_AUTOFIX_ENABLED=true`. Keep it unset initially. Confirm repository and
+tenant scoping and approved automation policy before enabling it. The separate
+AutoFix service still needs SHIELDAI_AUTOFIX_URL and the complete-header secret
+SHIELDAI_AUTOFIX_AUTHORIZATION after its own authentication contract is reviewed.
+A request acknowledgement does not prove every generated PR succeeded.
+
+Fork PRs use pull_request with withheld secrets and receive an explicit
+integration error. Do not switch to pull_request_target to execute fork code
+with credentials. Use an approved internal review branch for authenticated
+assessment of reviewed fork changes. Keep the existing gate check name for
+branch protection.
 
 ## Acceptance checks
 
 Run `python -m unittest discover -s tests -p 'test_security_gate_client.py' -v`.
-Then verify the authenticated endpoint on a bounded review commit: valid
-passing verdict, valid blocking verdict, wrong credential, unavailable
-endpoint, HTML/login response, and AutoFix withheld for integration failures.
-Report statuses and schema only; never print header values or tokens.
+Then Co-Pilot verifies a bounded real CI round-trip: valid passing verdict,
+valid blocking verdict, wrong credentials, unavailable endpoint, HTML response,
+wrong repo/commit, and no AutoFix on integration failures. Report only status,
+coverage and schema; never headers or tokens.
 
-## Backend follow-up
-
-The current shieldCICDGate source reads stored findings rather than performing
-a commit-specific scan, suppresses failed data reads into empty lists, and
-does not visibly filter the retrieved findings by repository in that function.
-Those gaps require a separate server change with confirmed entity schemas,
-tenant authorization, commit-bound scan evidence, freshness and failure
-handling. A structurally valid response alone is not proof of scan coverage.
-
-This PR remains review-only until endpoint/auth configuration and a real CI
-round-trip are verified by Co-Pilot. Production runtime source is unchanged.
+PR #11 requires backend corrections/tests for paginated changed files,
+missing/truncated patches, mixed-case severity counts, high policy enforcement
+and blocking I/O in an async route. These were posted in the review. A valid
+schema alone does not prove complete scan coverage. Keep PR #10 draft until
+that review and the real CI round-trip are complete.

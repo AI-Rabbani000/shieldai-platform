@@ -46,20 +46,28 @@ def request_json(url, body, authorization=""):
         raise IntegrationError("Gate endpoint returned invalid JSON (possibly an HTML/login page)") from None
 
 
-def gate_verdict(data):
-    if not isinstance(data, dict) or data.get("error") or type(data.get("pass")) is not bool:
+def gate_verdict(data, *, expected_repo=None, expected_commit=None):
+    if not isinstance(data, dict) or data.get("status") != "ok" or data.get("error"):
+        raise IntegrationError("Gate response has no completed security assessment")
+    if type(data.get("pass")) is not bool:
         raise IntegrationError("Gate response has no valid security verdict")
-    if type(data.get("blocked")) is not bool or data["blocked"] == data["pass"]:
-        raise IntegrationError("Gate response has inconsistent pass/blocked fields")
+    verdict = data.get("verdict")
+    if verdict not in ("pass", "blocked") or (verdict == "pass") != data["pass"]:
+        raise IntegrationError("Gate response has inconsistent pass/verdict fields")
+    if expected_repo is not None and data.get("repo") != expected_repo:
+        raise IntegrationError("Gate response is for a different repository")
+    if expected_commit is not None and data.get("commit") != expected_commit:
+        raise IntegrationError("Gate response is for a different commit")
     reasons = data.get("block_reasons")
-    critical = data.get("summary", {}).get("critical") if isinstance(data.get("summary"), dict) else None
+    summary = data.get("summary")
     if not isinstance(reasons, list) or not all(isinstance(r, str) for r in reasons):
         raise IntegrationError("Gate response has invalid block reasons")
-    if type(critical) is not int or critical < 0:
-        raise IntegrationError("Gate response has an invalid critical count")
-    if data["pass"] and (reasons or critical > 0):
+    fields = ("critical", "high", "new_critical", "secrets_found")
+    if not isinstance(summary, dict) or any(type(summary.get(k)) is not int or summary[k] < 0 for k in fields):
+        raise IntegrationError("Gate response has invalid finding counts")
+    if data["pass"] and (reasons or any(summary[k] > 0 for k in ("critical", "new_critical", "secrets_found"))):
         raise IntegrationError("Passing response contains blocking findings or reasons")
-    return ("passed" if data["pass"] else "blocked"), critical
+    return ("passed" if data["pass"] else "blocked"), summary["critical"]
 
 
 def write_outputs(verdict, critical=0):
@@ -84,9 +92,13 @@ def main(mode="gate"):
                 "github_token": token,
                 "block_on": ["critical"], "fail_on_secrets": True, "fail_on_new_critical": True,
             }
+            gate_key = os.environ.get("CI_GATE_API_KEY", "")
+            if not gate_key or any(c.isspace() for c in gate_key):
+                raise IntegrationError("Dedicated CI gate credential is not configured or invalid")
             data = request_json(os.environ.get("SHIELDAI_GATE_URL", ""), body,
-                                os.environ.get("SHIELDAI_GATE_AUTHORIZATION", ""))
-            verdict, critical = gate_verdict(data)
+                                "Bearer " + gate_key)
+            verdict, critical = gate_verdict(data, expected_repo=body["repo_full_name"],
+                                            expected_commit=body["commit_sha"])
             write_outputs(verdict, critical)
             print(f"ShieldAI gate verdict: {verdict}; critical findings: {critical}")
             return 0 if verdict == "passed" else 1

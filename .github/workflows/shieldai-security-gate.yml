@@ -34,7 +34,7 @@ jobs:
         id: gate
         env:
           SHIELDAI_GATE_URL: ${{ secrets.SHIELDAI_GATE_URL }}
-          SHIELDAI_GATE_AUTHORIZATION: ${{ secrets.SHIELDAI_GATE_AUTHORIZATION }}
+          CI_GATE_API_KEY: ${{ secrets.CI_GATE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python scripts/security_gate_client.py gate
