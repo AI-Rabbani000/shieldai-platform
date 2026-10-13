@@ -1,4 +1,4 @@
-name: 🛡️ ShieldAI Security Gate
+name: ShieldAI Security Gate
 
 on:
   pull_request:
@@ -6,83 +6,53 @@ on:
   push:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 jobs:
+  client-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_security_gate_client.py' -v
+
   security-gate:
     name: ShieldAI Security Scan & Gate
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      statuses: write
-      pull-requests: write
-
+    needs: client-contracts
+    outputs:
+      verdict: ${{ steps.gate.outputs.verdict }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: 🔍 Run ShieldAI Security Gate
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Request a validated security verdict
         id: gate
         env:
           SHIELDAI_GATE_URL: ${{ secrets.SHIELDAI_GATE_URL }}
+          CI_GATE_API_KEY: ${{ secrets.CI_GATE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          COMMIT_SHA="${{ github.sha }}"
-          REPO="${{ github.repository }}"
-          BRANCH="${{ github.ref_name }}"
-
-          echo "Running ShieldAI gate for $REPO @ $COMMIT_SHA"
-
-          RESPONSE=$(curl -s -X POST "${SHIELDAI_GATE_URL}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"repo_full_name\": \"${REPO}\",
-              \"commit_sha\": \"${COMMIT_SHA}\",
-              \"pr_number\": ${PR_NUMBER:-0},
-              \"branch\": \"${BRANCH}\",
-              \"github_token\": \"${GITHUB_TOKEN}\",
-              \"block_on\": [\"critical\"],
-              \"fail_on_secrets\": true,
-              \"fail_on_new_critical\": true
-            }")
-
-          echo "Response: $RESPONSE"
-
-          PASS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(str(d.get('pass', False)).lower())")
-          CRITICAL=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('summary',{}).get('critical', 0))")
-          REASONS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('; '.join(d.get('block_reasons', [])))")
-
-          echo "pass=$PASS" >> $GITHUB_OUTPUT
-          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
-          echo "reasons=$REASONS" >> $GITHUB_OUTPUT
-
-      - name: 🚫 Gate Decision
-        run: |
-          if [ "${{ steps.gate.outputs.pass }}" = "true" ]; then
-            echo "✅ ShieldAI Security Gate PASSED"
-            echo "Critical findings: ${{ steps.gate.outputs.critical }}"
-            exit 0
-          else
-            echo "❌ ShieldAI Security Gate BLOCKED"
-            echo "Reason: ${{ steps.gate.outputs.reasons }}"
-            exit 1
-          fi
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/security_gate_client.py gate
 
   autofix-trigger:
-    name: Trigger AutoFix for New Findings
+    name: Request policy-approved AutoFix
     runs-on: ubuntu-latest
     needs: security-gate
-    if: failure()
+    if: ${{ always() && needs.security-gate.outputs.verdict == 'blocked' && vars.SHIELDAI_AUTOFIX_ENABLED == 'true' }}
     steps:
-      - name: 🔧 Trigger ShieldAI AutoFix
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Request fixes only for a validated blocking verdict
         env:
           SHIELDAI_AUTOFIX_URL: ${{ secrets.SHIELDAI_AUTOFIX_URL }}
-        run: |
-          echo "Gate failed — triggering AutoFix for open critical findings"
-          curl -s -X POST "${SHIELDAI_AUTOFIX_URL}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"action\": \"bulk_fix\",
-              \"repo_full_name\": \"${{ github.repository }}\",
-              \"max_prs\": 5
-            }"
-          echo "AutoFix PRs triggered. Check the repo for new fix branches."
+          SHIELDAI_AUTOFIX_AUTHORIZATION: ${{ secrets.SHIELDAI_AUTOFIX_AUTHORIZATION }}
+          GATE_VERDICT: ${{ needs.security-gate.outputs.verdict }}
+          AUTOFIX_ENABLED: ${{ vars.SHIELDAI_AUTOFIX_ENABLED }}
+        run: python scripts/security_gate_client.py autofix
